@@ -1,18 +1,25 @@
-from webpie import WPApp, WPHandler
-from data_dispatcher.db import DBProject, DBFileHandle, DBRSE, DBProximityMap
-from data_dispatcher.logs import Logged, init_logger
-from data_dispatcher import Version
-from metacat.common import (
-    SignedToken,
-    SignedTokenExpiredError,
-    SignedTokenImmatureError,
-    SignedTokenUnacceptedAlgorithmError,
-    SignedTokenSignatureVerificationError,
-)
-from metacat.auth.server import BaseHandler, BaseApp, AuthHandler
-import json, urllib.parse, yaml, secrets, hashlib
+import json
+import os
+import urllib.parse
+from datetime import timedelta
+
 import requests
-from datetime import datetime, timedelta
+import yaml
+
+# from metacat.common import (
+#     SignedToken,
+#     SignedTokenExpiredError,
+#     SignedTokenImmatureError,
+#     SignedTokenUnacceptedAlgorithmError,
+#     SignedTokenSignatureVerificationError,
+# )
+from metacat.auth.server import AuthHandler, BaseApp, BaseHandler
+
+from data_dispatcher import Version
+
+# from webpie import WPApp, WPHandler
+from data_dispatcher.db import DBRSE, DBFileHandle, DBProject, DBProximityMap
+from data_dispatcher.logs import Logged, init_logger
 from data_dispatcher.query import ProjectQuery
 
 
@@ -39,7 +46,7 @@ class Handler(BaseHandler):
     def probe(self, request, relpath, **args):
         try:
             db = self.App.db()
-        except:
+        except Exception:
             return 500, "Database connection error"
         else:
             return "OK"
@@ -585,15 +592,22 @@ class App(BaseApp, Logged):
             pass
 
 
-def create_application(config):
+def create_application(config=None):
     if isinstance(config, str):
         config = yaml.load(open(config, "r"), Loader=yaml.SafeLoader)
+    else:
+        cfg = os.environ.get("DATA_DISPATCHER_CFG")
+        config = yaml.load(open(cfg, "r"), Loader=yaml.SafeLoader)
     prefix = config.get("web_server", {}).get("data_prefix", "")
     return App(config, prefix)
 
 
+application = create_application()
+
+
 if __name__ == "__main__":
-    import getopt, sys
+    import getopt
+    import sys
 
     opts, args = getopt.getopt(sys.argv[1:], "c:")
     opts = dict(opts)

@@ -1,11 +1,24 @@
-from webpie import WPApp, WPHandler, WPStaticHandler, sanitize
-from data_dispatcher.db import DBProject, DBFileHandle, DBRSE, DBProximityMap       # , DBUser
+import json
+import os
+import time
+import urllib
+from datetime import datetime, timezone
+
+import yaml
+from metacat.auth.server import AuthHandler, BaseApp, BaseHandler, GUIAuthHandler
+
+# from urllib.parse import quote, unquote, unquote_plus
+from webpie import WPStaticHandler, sanitize
+
 from data_dispatcher import Version
-from metacat.auth.server import AuthHandler, BaseHandler, BaseApp, GUIAuthHandler
-import urllib, os, yaml, time, json, pprint
-from urllib.parse import quote, unquote, unquote_plus
-from wsdbtools import ConnectionPool
-from datetime import timezone, datetime
+from data_dispatcher.db import (
+    DBRSE,
+    DBFileHandle,
+    DBProject,
+    DBProximityMap,  # , DBUser
+)
+
+# from wsdbtools import ConnectionPool
 from data_dispatcher.query import ProjectQuery
 
 
@@ -42,10 +55,10 @@ def page_index(page, npages, page_size, url_prefix):
     return index_page_links
 
 class ProjectsHandler(BaseHandler):
-    
+
     HandleStateOrder = {
         state:i for i, state in enumerate([
-            "available", 
+            "available",
             "reserved",
             "not found",
             "found",
@@ -53,7 +66,7 @@ class ProjectsHandler(BaseHandler):
             "failed"
         ])
     }
-    
+
     def parse_datetime(self, dt):
         dt = (dt or "").strip()
         if not dt:  return None
@@ -76,18 +89,18 @@ class ProjectsHandler(BaseHandler):
         istart = page*page_size
         form_dict = request.POST
         user, _ = self.authenticated_user()
-        
+
         search_user = None
         search_active_only = True
         search_created_after = search_created_before = None
-        
+
         form_posted = request.method == "POST"
         if form_posted:
             search_user = form_dict.get("search_user", "").strip() or None
             search_active_only = form_dict.get("search_active_only", "off") == "on"
             search_created_after = self.parse_datetime(form_dict.get("search_created_after"))
             search_created_before = self.parse_datetime(form_dict.get("search_created_before"))
-        
+
         state = "active" if search_active_only else None
 
         do_search = request.POST.get("action") == "Search"
@@ -98,22 +111,22 @@ class ProjectsHandler(BaseHandler):
                 query = ProjectQuery(query_text)
                 sql = query.sql()
                 projects = list(DBProject.from_sql(db, sql))
-                projects = [p for p in projects 
+                projects = [p for p in projects
                     if (not search_user or p.Owner == search_user)
                         and (not search_active_only or p.State == "active")
                 ]
             else:
                 projects = DBProject.list(db, with_handle_counts=False, state=state, owner=search_user)
-            projects = [p for p in projects 
+            projects = [p for p in projects
                             if
                                 (search_created_after is None or p.CreatedTimestamp >= search_created_after) and
                                 (search_created_before is None or p.CreatedTimestamp <= search_created_before)
                             ]
         else:
             projects = list(DBProject.list(db, with_handle_counts=False, state='active'))
-            
+
         projects = sorted(projects, key=lambda p: p.ID)
-            
+
         nprojects = len(projects)
         print("projects found:", nprojects)
         npages = (nprojects + page_size - 1)//page_size
@@ -228,12 +241,12 @@ class ProjectsHandler(BaseHandler):
         db = self.App.db()
         project_id = int(project_id)
         project = DBProject.get(db, project_id)
-        
+
         if project is None:
             message = urllib.parse.quote_plus(f"Project {project_id} not found")
             self.redirect(f"./projects?message={message}")
 
-        all_handles = sorted(project.handles(with_replicas=True, reload=True), 
+        all_handles = sorted(project.handles(with_replicas=True, reload=True),
                 key=lambda h: (self.HandleStateOrder.get(h.state(), 100), h.Attempts, h.Namespace, h.Name))
 
         nhandles = len(all_handles)
@@ -242,14 +255,14 @@ class ProjectsHandler(BaseHandler):
         handles = all_handles[istart:istart+page_size]
         #handles = list(project.get_handles([h.did() for h in all_handles[istart:istart+page_size]]))
         npages = (nhandles + page_size - 1)//page_size
-            
+
         available_handles = 0
         handle_counts_by_state = {state:0 for state in DBFileHandle.DerivedStates}     # {state -> count}
         state_index = {}        # {state -> page number}
         for i, h in enumerate(all_handles):
             replicas = h.replicas()
             h.n_replicas = len(replicas)
-            h.n_available_replicas = len([r for r in replicas.values() if r.is_available()]) 
+            h.n_available_replicas = len([r for r in replicas.values() if r.is_available()])
             state = h.state()
             #print("handle State:", h.State, "  state():", state)
             handle_counts_by_state[state] = handle_counts_by_state.get(state, 0) + 1
@@ -259,12 +272,12 @@ class ProjectsHandler(BaseHandler):
 
         state_page_links = {s: f"project?project_id={project_id}&page={p}&page_size={page_size}#state:{s}" for s, p in state_index.items()}
 
-            
+
         #handles_log = {}            # {did -> [log record, ...]}
         #files_log = {}              # {did -> [log record, ...]}
         #combined_log = {}
         project_log = project.get_log()
-        
+
         #for log_record in project.handles_log():
         #    #print("gui.project(): handle log_record:", log_record)
         #    did = log_record.Namespace + ":" + log_record.Name
@@ -280,14 +293,14 @@ class ProjectsHandler(BaseHandler):
             for did in list(combined_log.keys()):
                 combined_log[did] = sorted(combined_log[did], key=lambda r: r.T)
         #print("gui.project(): handles_log:", handles_log)
-    
+
         return self.render_to_response("project.html", project=project,
             handles=handles,
             available_handles=available_handles,
             handle_counts_by_state=handle_counts_by_state, states=DBFileHandle.DerivedStates,
             project_log = project.get_log(),
-            page = page, 
-            page_index = page_index(page, npages, page_size, f"project?project_id={project_id}"), 
+            page = page,
+            page_index = page_index(page, npages, page_size, f"project?project_id={project_id}"),
             state_index = state_page_links
         )
 
@@ -299,7 +312,7 @@ class ProjectsHandler(BaseHandler):
         db = self.App.db()
         project_id = int(project_id)
         project = DBProject.get(db, project_id)
-        
+
         if project is None:
             message = urllib.parse.quote_plus(f"Project {project_id} not found")
             self.redirect(f"./projects?message={message}")
@@ -354,7 +367,7 @@ class ProjectsHandler(BaseHandler):
             return unit * float(delta[:-1])
         else:
             return float(delta)
-        
+
     @sanitize()
     def handle_event_counts(self, request, relpath, t0=None, window=None, bin=None, **_):
         db = self.App.db()
@@ -372,12 +385,12 @@ class ProjectsHandler(BaseHandler):
             "counts": counts,
             "bin": bin
         }), "application/json"
-        
+
     def stats(self, request, relpath, **_):
         return self.render_to_response("stats.html")
 
 class RSEHandler(BaseHandler):
-    
+
     @sanitize()
     def proximity_map(self, request, relpath, message="", **args):
         enabled_rses = set(r.Name for r in DBRSE.list(self.App.db(), include_disabled=False))
@@ -399,9 +412,9 @@ class RSEHandler(BaseHandler):
         rses = list(DBRSE.list(self.App.db(), include_disabled=True))
         rses = sorted(rses, key=lambda r: (0 if r.Enabled else 1, r.Name))
         return self.render_to_response("rses.html", rses=rses, is_admin=is_admin)
-    
+
     index = rses
-    
+
     @sanitize()
     def rse(self, request, relpath, name=None, **args):
         name = name or relpath
@@ -437,26 +450,26 @@ class RSEHandler(BaseHandler):
         is_admin = user is not None and user.is_admin()
         if not is_admin:
             self.redirect("./rses")
-        
+
         name = request.POST["name"]
         rse = DBRSE.create(self.App.db(), name)
         self._do_update(rse, request)
         self.redirect(f"./rses")
-        
+
     @sanitize()
     def do_update(self, request, relpath, **args):
         user, auth_error = self.authenticated_user()
         is_admin = user is not None and user.is_admin()
         if not is_admin:
             self.redirect("./rses")
-        
+
         name = request.POST["name"]
         rse = DBRSE.get(self.App.db(), name)
         if rse is None:
             self.redirect("./rses")
         self._do_update(rse, request)
         self.redirect(f"./rses")
-        
+
     def _do_update(self, rse, request):
         rse.Type = request.POST.get("type", "")
         rse.Tape = request.POST.get("is_tape", "no") != "no"
@@ -473,7 +486,7 @@ class RSEHandler(BaseHandler):
 
 
 class TopHandler(BaseHandler):
-    
+
     def __init__(self, request, app):
         BaseHandler.__init__(self, request, app)
         #self.U = UsersHandler(request, app)
@@ -481,7 +494,7 @@ class TopHandler(BaseHandler):
         self.A = GUIAuthHandler(request, app)
         self.R = RSEHandler(request, app)
         self.static = WPStaticHandler(request, app)
-        
+
     def index(self, request, relpath, **args):
         self.redirect("P/projects")
 
@@ -489,7 +502,7 @@ class TopHandler(BaseHandler):
 def pretty_time_delta(t):
     if t == None:   return ""
     sign = ''
-    if t < 0:   
+    if t < 0:
         sign = '-'
         t = -t
     seconds = t
@@ -514,7 +527,7 @@ def pretty_time_delta(t):
         days = hours // 24
         hours = hours % 24
         out = "%dd%02dh%02dm" % (days, hours, minutes)
-        
+
     return sign + out
 
 def as_dt_utc(t):
@@ -525,11 +538,11 @@ def as_dt_utc(t):
     if isinstance(t, (int, float)):
         t = datetime.fromtimestamp(t, timezone.utc)
     return t.strftime("%D&nbsp;%H:%M:%S")
-    
+
 def pprint_data(data):
     import pprint
     return pprint.pformat(data, indent=2)
-    
+
 def format_log_data(data):
     import pprint
     parts = []
@@ -543,13 +556,13 @@ def format_log_data(data):
         need_break = isinstance(v, (dict, list))
         first_line = False
     return "".join(parts)
-    
+
 def none_as_blank(x):
     if x is None:   return ''
     else: return str(x)
 
 class App(BaseApp):
-    
+
     def __init__(self, config, prefix):
         BaseApp.__init__(self, config, TopHandler, prefix=prefix)
         self.Config = config
@@ -566,33 +579,42 @@ class App(BaseApp):
 
     def init(self):
         #print("App.init... prefix:", self.Prefix)
-        templdir = self.ScriptHome
+        #templdir = self.ScriptHome
+        templdir = os.environ.get("JINJA2_TEMPLATES", "server")
+
         self.initJinjaEnvironment(
             tempdirs=[templdir, "."],
             globals={
-                "GLOBAL_Version": Version, 
-                "GLOBAL_SiteTitle": self.SiteTitle,
+                "GLOBAL_Version"   : Version,
+                "GLOBAL_SiteTitle" : self.SiteTitle,
                 "GLOBAL_MetaCatURL": self.MetaCatURL
             },
-            filters = {
+            filters={
                 "pretty_time_delta": pretty_time_delta,
-                "format_log_data": format_log_data,
-                "as_dt_utc": as_dt_utc,
-                "none_as_blank": none_as_blank
+                "format_log_data"  : format_log_data,
+                "as_dt_utc"        : as_dt_utc,
+                "none_as_blank"    : none_as_blank
             }
         )
 
-def create_application(config):
+def create_application(config=None):
     if isinstance(config, str):
         config = yaml.load(open(config, "r"), Loader=yaml.SafeLoader)
+    else:
+        cfg = os.environ.get("DATA_DISPATCHER_CFG")
+        config = yaml.load(open(cfg, "r"), Loader=yaml.SafeLoader)
     server_config = config.get("web_server", {})
     prefix = server_config.get("gui_prefix", "")
     return App(config, prefix)
-    
-        
+
+
+application = create_application()
+
+
 if __name__ == "__main__":
-    import getopt, sys
-    
+    import getopt
+    import sys
+
     opts, args = getopt.getopt(sys.argv[1:], "c:l")
     opts = dict(opts)
     config = yaml.load(open(opts["-c"], "r"), Loader=yaml.SafeLoader)
@@ -602,4 +624,4 @@ if __name__ == "__main__":
     logging = "-l" in opts or server_config.get("gui_logging")
     app = create_application(config)
     app.run_server(port, logging=logging)
-    
+
